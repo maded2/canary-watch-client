@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"flag"
 	"fmt"
 	"io/ioutil"
 	"os"
@@ -15,57 +16,110 @@ import (
 	canarytail "github.com/canarytail/client"
 )
 
-const version = "0.1"
-
-type context struct {
-	Debug bool
-}
-
-var cli struct {
-	Debug bool `help:"Enable debug mode."`
-
-	Init initCmd `cmd help:"Initialize config and keys to $CANARY_HOME"`
-
-	Key struct {
-		New keyNewCmd `cmd help:"Generates a new key for signing canaries and saves to $CANARY_HOME/DOMAIN"`
-	} `cmd help:"This command is for manipulating cryptographic keys."`
-
-	Canary struct {
-		New      canaryNewCmd      `cmd help:"Generates a new canary, signs it using the key located in $CANARY_HOME/DOMAIN, and saves to that same path.  Codes provided in OPTIONS will be removed from the canary, signifying that event has triggered the canary."`
-		Update   canaryUpdateCmd   `cmd help:"Updates the existing canary named DOMAIN. If no OPTIONS are provided, it merely updates the signature date. If no EXPIRY is provided, it reuses the previous value (e.g. renewing for a month).  Codes provided in OPTIONS will be removed from the canary, signifying that event has triggered the canary."`
-		Panic    canaryPanicCmd    `cmd help:"Updates the existing canary named ALIAS. The canary is signed with the panic key, which will ensure the canary validation fails in all cases."`
-		Validate canaryValidateCmd `cmd help:"Validates a canary's signature"`
-	} `cmd help:"This command is for manipulating canaries."`
-
-	Version versionCmd `cmd help:"Show version and exit"`
-}
+const version = "0.2"
 
 func main() {
-	ctx := kong.Parse(&cli, kong.UsageOnError())
-	err := ctx.Run(&context{Debug: cli.Debug})
-	ctx.FatalIfErrorf(err)
+	expiry := flag.Int("expiry", 0, "xpires in # minutes from now (default: 43200, one month)")
+	cease := flag.Bool("cease", false, "Court order to cease operations")
+	duress := flag.Bool("duress", false, "Under duress (coercion, blackmail, etc)")
+	gag := flag.Bool("gag", false, "Gag order received")
+	raid := flag.Bool("raid", false, "Raided, but data unlikely compromised")
+	seize := flag.Bool("seize", false, "Hardware or data seized, unlikely compromised")
+	subp := flag.Bool("subp", false, "Subpoena received")
+	trap := flag.Bool("trap", false, "Trap and trace order received")
+	war := flag.Bool("war", false, "Warrant received")
+	xcred := flag.Bool("xcred", false, "Compromised credentials")
+	xopers := flag.Bool("xopers", false, "Operations compromised")
+	flag.Parse()
+
+	if !flag.Parsed() || len(flag.Args()) == 0 || flag.Arg(0) == "help" {
+		printUsage()
+		return
+	}
+	switch flag.Arg(0) {
+	case "help":
+		printHelp(flag.Args())
+	case "version":
+		printVersion()
+	case "init":
+		initCmd()
+	case "key":
+		keyCmd(flag.Args())
+	case "canary":
+		canaryCmd(canaryOptions{
+			Expiry: *expiry,
+			GAG:    *gag,
+			TRAP:   *trap,
+			DURESS: *duress,
+			XCRED:  *xcred,
+			XOPERS: *xopers,
+			WAR:    *war,
+			SUBP:   *subp,
+			CEASE:  *cease,
+			RAID:   *raid,
+			SEIZE:  *seize,
+		}, flag.Args())
+	}
 }
 
-type initCmd struct {
+func printUsage() {
+	fmt.Print(helpHeader)
+	fmt.Print(helpKey)
+	fmt.Print(helpCanaryHeader)
+	fmt.Print(helpCanaryNew)
+	fmt.Print(helpCanaryUpdate)
+	fmt.Print(helpCanaryOptions)
+	fmt.Print(helpCanaryValidate)
+	fmt.Print(helpFooter)
 }
 
-func (cmd *initCmd) Run(ctx *context) error {
+func printHelp(args []string) {
+	if len(args) > 1 {
+		switch args[1] {
+		case "key":
+			fmt.Print(helpKey)
+		case "canary":
+			fmt.Print(helpCanaryHeader)
+			if len(args) > 2 {
+				switch args[2] {
+				case "new":
+					fmt.Print(helpCanaryNew)
+					fmt.Print(helpCanaryOptions)
+				case "update":
+					fmt.Print(helpCanaryUpdate)
+					fmt.Print(helpCanaryOptions)
+				case "validate":
+					fmt.Print(helpCanaryValidate)
+					fmt.Print(helpCanaryOptions)
+				}
+			} else {
+				fmt.Print(helpCanaryNew)
+				fmt.Print(helpCanaryUpdate)
+				fmt.Print(helpCanaryValidate)
+				fmt.Print(helpCanaryOptions)
+			}
+		}
+	} else {
+		printUsage()
+	}
+}
+
+func initCmd() {
 	dir := canaryHomeDir()
 	if _, err := os.Stat(dir); os.IsNotExist(err) {
-		return os.Mkdir(dir, 0700)
+		os.Mkdir(dir, 0700)
 	}
-	return nil
 }
 
-type keyCmd struct {
-	New keyNewCmd `cmd help:"Generates a new key for signing canaries and saves to $CANARY_HOME/ALIAS"`
+func keyCmd(args []string) {
+	if len(args) == 2 {
+		keyNew()
+	} else {
+		fmt.Print(helpKey)
+	}
 }
 
-type keyNewCmd struct {
-	Domain string `arg name:"DOMAIN" help:"Domain of the canary"`
-}
-
-func (cmd *keyNewCmd) Run(ctx *context) error {
+func keyNew(args []string) {
 	stagingPath := canaryDirSafe(cmd.Domain)
 
 	fmt.Printf("Generating signing key pair for %v at %v...\n", cmd.Domain, stagingPath)
@@ -103,26 +157,23 @@ func (cmd *keyNewCmd) Run(ctx *context) error {
 		return err
 	}
 
-	return nil
 }
 
-type canaryOpCmd struct {
-	Domain string `arg name:"DOMAIN"`
-
-	Expiry int  `name:"expiry" help:"Expires in # minutes from now (default: 43200, one month)" default:"43200"`
-	GAG    bool `name:"GAG" help:"Gag order received"`
-	TRAP   bool `name:"TRAP" help:"Trap and trace order received"`
-	DURESS bool `name:"DURESS" help:"Under duress (coercion, blackmail, etc)"`
-	XCRED  bool `name:"XCRED" help:"Compromised credentials"`
-	XOPERS bool `name:"XOPERS" help:"Operations compromised"`
-	WAR    bool `name:"WAR" help:"Warrant received"`
-	SUBP   bool `name:"SUBP" help:"Subpoena received"`
-	CEASE  bool `name:"CEASE" help:"Court order to cease operations"`
-	RAID   bool `name:"RAID" help:"Raided, but data unlikely compromised"`
-	SEIZE  bool `name:"SEIZE" help:"Hardware or data seized, unlikely compromised"`
+type canaryOptions struct {
+	Expiry int
+	GAG    bool
+	TRAP   bool
+	DURESS bool
+	XCRED  bool
+	XOPERS bool
+	WAR    bool
+	SUBP   bool
+	CEASE  bool
+	RAID   bool
+	SEIZE  bool
 }
 
-func getCodes(cmd canaryOpCmd) []string {
+func getCodes(cmd canaryOptions) []string {
 	codes := make([]string, 0)
 	if cmd.GAG {
 		codes = append(codes, "gag")
@@ -159,30 +210,45 @@ func getCodes(cmd canaryOpCmd) []string {
 
 type keyPairReader func(dir string) (ed25519.PublicKey, ed25519.PrivateKey, error)
 
-func generateCanary(cmd canaryOpCmd, signingKeyPairReader keyPairReader) error {
-	dir := canaryDirSafe(cmd.Domain)
+func canaryCmd(options canaryOptions, args []string) {
+	if len(args) < 3 {
+		printCanaryHelp()
+		return
+	}
+	domain := args[2]
+	switch args[1] {
+	case "new":
+		generateCanary(options, readKeyPair, domain)
+	case "update":
+		updateCanary(options, readKeyPair, domain)
+	}
+}
 
+func generateCanary(cmd canaryOptions, signingKeyPairReader keyPairReader, dir string) {
 	// read the key pair for this canary alias
 	publickKey, _, err := readKeyPair(dir)
 	if err != nil {
-		return err
+		fmt.Printf("Problem with the public key: %s", err)
+		return
 	}
 
 	// read the panic key pair for this canary alias
 	publicPanicKey, _, err := readPanicKeyPair(dir)
 	if err != nil {
-		return err
+		fmt.Printf("Problem with the panic key: %s", err)
+		return
 	}
 
 	// read the key pair for this canary alias
 	publicSigningKey, privateSigningKey, err := signingKeyPairReader(dir)
 	if err != nil {
-		return err
+		fmt.Printf("Problem trying reading key pair: %s", err)
+		return
 	}
 
 	// compose the canary
 	canary := &canarytail.Canary{Claim: canarytail.CanaryClaim{
-		Domain:     cmd.Domain,
+		Domain:     dir,
 		Codes:      getCodes(cmd),
 		Release:    time.Now().Format(canarytail.TimestampLayout),
 		Freshness:  canarytail.GetLastBlockChainBlockHashFormatted(),
@@ -195,34 +261,36 @@ func generateCanary(cmd canaryOpCmd, signingKeyPairReader keyPairReader) error {
 	// sign it
 	err = canary.Sign(privateSigningKey, publicSigningKey)
 	if err != nil {
-		return err
+		fmt.Printf("Problem trying sign domain: %s", err)
+		return
 	}
 
 	// and print it
 	canaryFormatted := canary.Format()
 	writeToFile(path.Join(dir, "canary.json"), canaryFormatted)
 	fmt.Println(canaryFormatted)
-	return nil
+	return
 }
 
-func updateCanary(cmd canaryOpCmd, signingKeyPairReader keyPairReader) error {
-	dir := canaryDirSafe(cmd.Domain)
-
+func updateCanary(cmd canaryOptions, signingKeyPairReader keyPairReader, dir string) {
 	canary, err := readCanaryFile(path.Join(dir, "canary.json"))
 	if err != nil {
-		return err
+		fmt.Printf("Problem with the public key: %s", err)
+		return
 	}
 
 	// read the panic key pair for this canary alias
 	publicPanicKey, _, err := readPanicKeyPair(dir)
 	if err != nil {
-		return err
+		fmt.Printf("Problem with the panic key: %s", err)
+		return
 	}
 
 	// read the key pair for this canary alias
 	publicSigningKey, privateSigningKey, err := signingKeyPairReader(dir)
 	if err != nil {
-		return err
+		fmt.Printf("Problem trying reading key pair: %s", err)
+		return
 	}
 
 	// update the canary
@@ -250,56 +318,42 @@ func updateCanary(cmd canaryOpCmd, signingKeyPairReader keyPairReader) error {
 	// if the panic key is not the same, error out
 	panicKeyEnc := canarytail.FormatKey(publicPanicKey)
 	if panicKeyEnc == publicKeyEnc && panicKeyEnc != canary.Claim.PanicKey {
-		return errors.New("The panic key does not match")
+		fmt.Printf("The panic key does not match")
+		return
 	}
 
 	// sign it
 	err = canary.Sign(privateSigningKey, publicSigningKey)
 	if err != nil {
-		return err
+		fmt.Printf("Problem trying sign domain: %s", err)
+		return
 	}
 
 	// and print it
 	canaryFormatted := canary.Format()
 	writeToFile(path.Join(dir, "canary.json"), canaryFormatted)
 	fmt.Println(canaryFormatted)
-	return nil
+	return
 }
 
-type canaryNewCmd struct {
-	canaryOpCmd
-}
-
-func (cmd *canaryNewCmd) Run(ctx *context) error {
+func canaryNewCmd() {
 	// make sure the canary doesnt exist yet?
 	// initialize the keys if they dont exist yet?
-	return generateCanary(cmd.canaryOpCmd, readKeyPair)
+	generateCanary(cmd.canaryOpCmd, readKeyPair)
 }
 
-type canaryUpdateCmd struct {
-	canaryOpCmd
-}
-
-func (cmd *canaryUpdateCmd) Run(ctx *context) error {
+func canaryUpdateCmd() {
 	// make sure the canary already exists?
-	return updateCanary(cmd.canaryOpCmd, readKeyPair)
+	updateCanary(cmd.canaryOpCmd, readKeyPair)
 }
 
-type canaryPanicCmd struct {
-	canaryOpCmd
-}
-
-func (cmd *canaryPanicCmd) Run(ctx *context) error {
+func canaryPanicCmd() {
 	// make sure the canary doesnt exist yet?
 	// initialize the keys if they dont exist yet?
-	return updateCanary(cmd.canaryOpCmd, readPanicKeyPair)
+	updateCanary(cmd.canaryOpCmd, readPanicKeyPair)
 }
 
-type canaryValidateCmd struct {
-	URI string `arg name:"uri"`
-}
-
-func (cmd *canaryValidateCmd) Run(ctx *context) error {
+func canaryValidateCmd() {
 	// make sure the canary already exists?
 	canary, err := canarytail.Read(cmd.URI)
 	if err != nil {
@@ -312,15 +366,10 @@ func (cmd *canaryValidateCmd) Run(ctx *context) error {
 		return err
 	}
 	fmt.Println("OK!")
-	return nil
 }
 
-type versionCmd struct {
-}
-
-func (cmd *versionCmd) Run(ctx *context) error {
+func printVersion() {
 	fmt.Printf("CLI Version %v\nStandard Version %v\n", version, canarytail.StandardVersion)
-	return nil
 }
 
 // helpers
